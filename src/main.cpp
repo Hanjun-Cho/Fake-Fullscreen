@@ -57,13 +57,20 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
                     SendMessageW(root, WM_NCHITTEST, 0,
                                  MAKELPARAM(ms->pt.x, ms->pt.y));
                 if (hit == HTCAPTION) {
-                    // Swallow the down so the OS does not begin its own move,
-                    // but do not untoggle yet — wait for a real drag.
+                    // Swallow the down so the OS does not begin its own native
+                    // caption move (we need to drive it to resize-to-original).
+                    // Do not untoggle yet — that happens only on a real drag.
                     g_drag.down = true;
                     g_drag.moving = false;
                     g_drag.hwnd = root;
                     g_drag.startCursor = ms->pt;
                     winutil::GetBounds(root, g_drag.startRect);
+                    // Swallowing the press also suppresses the click's normal
+                    // activation, so a plain title-bar click would never focus
+                    // the window. Activate it here instead.
+                    if (GetForegroundWindow() != root) {
+                        SetForegroundWindow(root);
+                    }
                     return 1;
                 }
             }
