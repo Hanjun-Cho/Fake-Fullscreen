@@ -40,7 +40,11 @@ bool BoundsEqual(const RECT& a, const RECT& b) {
 // ---------------------------------------------------------------------------
 
 struct MaximizeToggle::Impl {
-    std::unordered_map<HWND, RECT> original;
+    struct Save {
+        RECT original;
+        RECT applied;
+    };
+    std::unordered_map<HWND, Save> saved;
 };
 
 const std::string& MaximizeToggle::ActionName() {
@@ -52,21 +56,33 @@ MaximizeToggle::MaximizeToggle() : impl_(std::make_unique<Impl>()) {}
 MaximizeToggle::~MaximizeToggle() = default;
 
 void MaximizeToggle::Apply(HWND hwnd) {
-    auto it = impl_->original.find(hwnd);
-    if (it != impl_->original.end()) {
-        if (winutil::SetBounds(hwnd, it->second)) {
-            std::printf("%s: restored window to %ldx%ld at (%ld,%ld)\n",
-                        Name().c_str(),
-                        it->second.right - it->second.left,
-                        it->second.bottom - it->second.top,
-                        it->second.left, it->second.top);
-        } else {
-            LogWinError("SetBounds (restore)");
-        }
-        impl_->original.erase(it);
+    RECT current{};
+    if (!winutil::GetBounds(hwnd, current)) {
+        LogWinError("GetBounds");
         return;
     }
 
+    auto it = impl_->saved.find(hwnd);
+    const bool active =
+        it != impl_->saved.end() && BoundsEqual(current, it->second.applied);
+
+    if (active) {
+        if (winutil::SetBounds(hwnd, it->second.original)) {
+            std::printf("%s: restored window to %ldx%ld at (%ld,%ld)\n",
+                        Name().c_str(),
+                        it->second.original.right - it->second.original.left,
+                        it->second.original.bottom - it->second.original.top,
+                        it->second.original.left, it->second.original.top);
+        } else {
+            LogWinError("SetBounds (restore)");
+        }
+        impl_->saved.erase(it);
+        return;
+    }
+
+    // Either never maximized, or the user moved it since (so it is no longer
+    // at our maximized position). In both cases treat this as a fresh
+    // maximize: the current bounds become the "before" state.
     winutil::EnsureRestored(hwnd);
 
     RECT before{};
@@ -91,7 +107,7 @@ void MaximizeToggle::Apply(HWND hwnd) {
         return;
     }
 
-    impl_->original[hwnd] = before;
+    impl_->saved[hwnd] = Impl::Save{before, target};
     std::printf("%s: maximized window to %ldx%ld at (%ld,%ld)\n",
                 Name().c_str(),
                 target.right - target.left, target.bottom - target.top,

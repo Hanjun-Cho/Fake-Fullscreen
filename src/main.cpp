@@ -65,8 +65,13 @@ void ShowTrayMenu() {
     POINT pt{};
     GetCursorPos(&pt);
     SetForegroundWindow(g_window);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, g_window, nullptr);
+    const UINT cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                    pt.x, pt.y, 0, g_window, nullptr);
     DestroyMenu(menu);
+
+    if (cmd == kExitCommand) {
+        DestroyWindow(g_window);
+    }
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
