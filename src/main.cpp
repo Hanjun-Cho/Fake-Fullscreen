@@ -20,6 +20,74 @@ const wchar_t kWindowTitle[] = L"FakeFullscreen";
 
 std::string g_exeDir;
 HWND g_window = nullptr;
+HHOOK g_mouseHook = nullptr;
+
+// State for our own window drag. When the user starts dragging the caption of
+// a controlled window we swallow the OS move and drive the window ourselves,
+// which lets us resize it to its original size and move it freely.
+struct DragState {
+    bool active = false;
+    HWND hwnd = nullptr;
+    POINT startCursor{};
+    RECT startRect{};
+} g_drag;
+
+void SetWindowRect(HWND hwnd, const RECT& rc) {
+    SetWindowPos(hwnd, nullptr, rc.left, rc.top,
+                 rc.right - rc.left, rc.bottom - rc.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION) {
+        const MSLLHOOKSTRUCT* ms = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
+
+        if (wParam == WM_LBUTTONDOWN && !g_drag.active) {
+            HWND under = WindowFromPoint(ms->pt);
+            HWND root = under != nullptr ? GetAncestor(under, GA_ROOT) : nullptr;
+            if (root != nullptr && ffs::IsControlled(root)) {
+                // Only caption drags (not clicks on client-area buttons).
+                const LRESULT hit =
+                    SendMessageW(root, WM_NCHITTEST, 0,
+                                 MAKELPARAM(ms->pt.x, ms->pt.y));
+                if (hit == HTCAPTION) {
+                    RECT rc{};
+                    if (ffs::UntoggleForDrag(root, ms->pt, rc)) {
+                        g_drag.active = true;
+                        g_drag.hwnd = root;
+                        g_drag.startCursor = ms->pt;
+                        g_drag.startRect = rc;
+                        return 1;  // swallow so the app does not start its own move
+                    }
+                }
+            }
+        } else if (g_drag.active) {
+            if (wParam == WM_MOUSEMOVE) {
+                if (IsWindow(g_drag.hwnd)) {
+                    RECT r = g_drag.startRect;
+                    OffsetRect(&r, ms->pt.x - g_drag.startCursor.x,
+                               ms->pt.y - g_drag.startCursor.y);
+                    SetWindowRect(g_drag.hwnd, r);
+                }
+            } else if (wParam == WM_LBUTTONUP) {
+                g_drag.active = false;
+                g_drag.hwnd = nullptr;
+            }
+        }
+    }
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+void InstallDragHook() {
+    g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, nullptr, 0);
+}
+
+void RemoveDragHook() {
+    if (g_mouseHook != nullptr) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = nullptr;
+    }
+}
 
 std::string ExeDirectory() {
     char path[MAX_PATH] = {};
@@ -159,6 +227,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         return 1;
     }
 
+    InstallDragHook();
+
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         if (msg.message == WM_HOTKEY) {
@@ -168,6 +238,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         DispatchMessageW(&msg);
     }
 
+    RemoveDragHook();
     RemoveTrayIcon();
     return 0;
 }

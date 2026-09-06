@@ -6,15 +6,20 @@ monitor's working area.
 
 | Action | Default hotkey | Effect |
 | ------ | -------------- | ------ |
-| `maximize_toggle` | `Ctrl+Alt+Space` | Fill the focused window's monitor work area (minus margins); press again to restore its original bounds. |
+| `maximize_toggle` | `Ctrl+Alt+Space` | Fill the focused window's monitor work area (minus margins); press again to restore its original size and position. |
 | `snap_left` | `Ctrl+Alt+Left` | Move the window into the left half (minus margins). No-op if already there. |
 | `snap_right` | `Ctrl+Alt+Right` | Move into the right half. No-op if already there. |
 | `snap_top` | `Ctrl+Alt+Up` | Move into the top half. No-op if already there. |
 | `snap_bottom` | `Ctrl+Alt+Down` | Move into the bottom half. No-op if already there. |
 
-`maximize_toggle` toggles back to the original bounds; snaps are one-way and
-idempotent (snapping to the same half again does nothing, and does not restore
-the previous size).
+`maximize_toggle` is the only toggling action. Pressing it again while the
+window is still maximized restores its original size and position. Dragging a
+window that the app controls (maximized or snapped) is detected immediately
+and untoggles it: a maximized window returns to its original size and
+position, while a snapped window resizes to its original size and continues
+following the mouse (keeping the cursor's grab point fixed). Snaps are one-way and idempotent:
+snapping to the same half again does nothing, and snaps never restore a
+previous size.
 
 Hotkeys are remapped by editing `config.ini`, which sits **next to the
 executable in the build directory**. No recompile needed to remap keys; the

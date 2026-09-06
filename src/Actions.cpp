@@ -10,6 +10,18 @@ namespace {
 // before maximizing or snapping, so windows do not touch the screen edges.
 constexpr long kDefaultMargin = 15;
 
+enum class Mode { Maximize, Snap };
+
+struct Control {
+    Mode mode;
+    RECT original;  // size (and position) the window had before placement
+    RECT applied;   // bounds the app last set for the window
+};
+
+// Windows currently under application control. Shared by all actions so a
+// maximized window that is then snapped keeps one "controlled" record.
+std::unordered_map<HWND, Control> g_controlled;
+
 bool LogWinError(const char* what) {
     std::fprintf(stderr, "%s failed (error %lu)\n", what, GetLastError());
     return false;
@@ -19,7 +31,6 @@ bool GetWorkArea(HWND hwnd, RECT& out) {
     return winutil::GetMonitorWorkArea(hwnd, out);
 }
 
-// Shrinks a rect inward by the margin on every side.
 bool ApplyMargins(RECT& rc) {
     rc.left += kDefaultMargin;
     rc.top += kDefaultMargin;
@@ -33,27 +44,57 @@ bool BoundsEqual(const RECT& a, const RECT& b) {
            a.right == b.right && a.bottom == b.bottom;
 }
 
+// A rect anchored at `current`'s top-left but sized to `model`. Used to scale
+// a window down to its original size without moving it.
+RECT SizeAt(const RECT& current, const RECT& model) {
+    RECT rc = current;
+    rc.right = rc.left + (model.right - model.left);
+    rc.bottom = rc.top + (model.bottom - model.top);
+    return rc;
+}
+
+RECT MaximizeTarget(HWND hwnd, bool& ok) {
+    RECT work{};
+    if (!GetWorkArea(hwnd, work)) {
+        LogWinError("GetWorkArea");
+        ok = false;
+        return {};
+    }
+    if (!ApplyMargins(work)) {
+        std::fprintf(stderr, "maximize_toggle: margins leave no usable space.\n");
+        ok = false;
+        return {};
+    }
+    ok = true;
+    return work;
+}
+
+RECT SnapTarget(HWND hwnd, winutil::Half half, bool& ok) {
+    RECT work{};
+    if (!GetWorkArea(hwnd, work)) {
+        LogWinError("GetWorkArea");
+        ok = false;
+        return {};
+    }
+    if (!ApplyMargins(work)) {
+        std::fprintf(stderr, "snap: margins leave no usable space.\n");
+        ok = false;
+        return {};
+    }
+    ok = true;
+    return winutil::HalfBounds(work, half);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // MaximizeToggle
 // ---------------------------------------------------------------------------
 
-struct MaximizeToggle::Impl {
-    struct Save {
-        RECT original;
-        RECT applied;
-    };
-    std::unordered_map<HWND, Save> saved;
-};
-
 const std::string& MaximizeToggle::ActionName() {
     static const std::string kName = "maximize_toggle";
     return kName;
 }
-
-MaximizeToggle::MaximizeToggle() : impl_(std::make_unique<Impl>()) {}
-MaximizeToggle::~MaximizeToggle() = default;
 
 void MaximizeToggle::Apply(HWND hwnd) {
     RECT current{};
@@ -62,52 +103,62 @@ void MaximizeToggle::Apply(HWND hwnd) {
         return;
     }
 
-    auto it = impl_->saved.find(hwnd);
-    const bool active =
-        it != impl_->saved.end() && BoundsEqual(current, it->second.applied);
+    auto it = g_controlled.find(hwnd);
 
-    if (active) {
-        if (winutil::SetBounds(hwnd, it->second.original)) {
-            std::printf("%s: restored window to %ldx%ld at (%ld,%ld)\n",
-                        Name().c_str(),
-                        it->second.original.right - it->second.original.left,
-                        it->second.original.bottom - it->second.original.top,
-                        it->second.original.left, it->second.original.top);
-        } else {
-            LogWinError("SetBounds (restore)");
+    if (it != g_controlled.end() && it->second.mode == Mode::Maximize) {
+        if (BoundsEqual(current, it->second.applied)) {
+            // Still maximized (not dragged): toggle off, restore size+position.
+            if (winutil::SetBounds(hwnd, it->second.original)) {
+                std::printf("%s: restored window to %ldx%ld at (%ld,%ld)\n",
+                            Name().c_str(),
+                            it->second.original.right - it->second.original.left,
+                            it->second.original.bottom - it->second.original.top,
+                            it->second.original.left, it->second.original.top);
+            } else {
+                LogWinError("SetBounds (restore)");
+            }
+            g_controlled.erase(it);
+            return;
         }
-        impl_->saved.erase(it);
+        // Moved but the drag hook missed it: scale down to original size in place.
+        const RECT rc = SizeAt(current, it->second.original);
+        if (winutil::SetBounds(hwnd, rc)) {
+            std::printf("%s: shrank window in place to %ldx%ld at (%ld,%ld)\n",
+                        Name().c_str(), rc.right - rc.left, rc.bottom - rc.top,
+                        rc.left, rc.top);
+        } else {
+            LogWinError("SetBounds (shrink)");
+        }
+        g_controlled.erase(it);
         return;
     }
 
-    // Either never maximized, or the user moved it since (so it is no longer
-    // at our maximized position). In both cases treat this as a fresh
-    // maximize: the current bounds become the "before" state.
+    // The original to restore is the very first pre-application bounds, so if
+    // the window was already snapped, keep its stored original when we now
+    // maximize it.
+    RECT original = current;
+    if (it != g_controlled.end()) {
+        original = it->second.original;
+    }
     winutil::EnsureRestored(hwnd);
-
-    RECT before{};
-    if (!winutil::GetBounds(hwnd, before)) {
-        LogWinError("GetBounds");
-        return;
+    if (it == g_controlled.end()) {
+        if (!winutil::GetBounds(hwnd, original)) {
+            LogWinError("GetBounds");
+            return;
+        }
     }
 
-    RECT work{};
-    if (!GetWorkArea(hwnd, work)) {
-        LogWinError("GetWorkArea");
+    bool ok = false;
+    const RECT target = MaximizeTarget(hwnd, ok);
+    if (!ok) {
         return;
     }
-    RECT target = work;
-    if (!ApplyMargins(target)) {
-        std::fprintf(stderr, "%s: margins leave no usable space.\n", Name().c_str());
-        return;
-    }
-
     if (!winutil::SetBounds(hwnd, target)) {
         LogWinError("SetBounds (maximize)");
         return;
     }
 
-    impl_->saved[hwnd] = Impl::Save{before, target};
+    g_controlled[hwnd] = Control{Mode::Maximize, original, target};
     std::printf("%s: maximized window to %ldx%ld at (%ld,%ld)\n",
                 Name().c_str(),
                 target.right - target.left, target.bottom - target.top,
@@ -143,27 +194,36 @@ const std::string& Snap::Name() const {
 }
 
 void Snap::Apply(HWND hwnd) {
-    winutil::EnsureRestored(hwnd);
-
-    RECT work{};
-    if (!GetWorkArea(hwnd, work)) {
-        LogWinError("GetWorkArea");
-        return;
-    }
-    if (!ApplyMargins(work)) {
-        std::fprintf(stderr, "%s: margins leave no usable space.\n", Name().c_str());
-        return;
-    }
-    const RECT target = winutil::HalfBounds(work, half_);
-
     RECT current{};
     if (!winutil::GetBounds(hwnd, current)) {
         LogWinError("GetBounds");
         return;
     }
-    if (BoundsEqual(current, target)) {
-        std::printf("%s: window already snapped; no change.\n", Name().c_str());
+
+    bool ok = false;
+    const RECT target = SnapTarget(hwnd, half_, ok);
+    if (!ok) {
         return;
+    }
+
+    if (BoundsEqual(current, target)) {
+        std::printf("%s: window already in that half; no change.\n", Name().c_str());
+        return;
+    }
+
+    // Preserve the window's original pre-application bounds across placement
+    // switches (e.g. a maximized window that is then snapped) so an eventual
+    // drag-untoggle returns to the true original size.
+    auto it = g_controlled.find(hwnd);
+    RECT original{};
+    if (it != g_controlled.end()) {
+        original = it->second.original;
+    } else {
+        winutil::EnsureRestored(hwnd);
+        if (!winutil::GetBounds(hwnd, original)) {
+            LogWinError("GetBounds");
+            return;
+        }
     }
 
     if (!winutil::SetBounds(hwnd, target)) {
@@ -171,10 +231,65 @@ void Snap::Apply(HWND hwnd) {
         return;
     }
 
+    g_controlled[hwnd] = Control{Mode::Snap, original, target};
     std::printf("%s: snapped window to %ldx%ld at (%ld,%ld)\n",
                 Name().c_str(),
                 target.right - target.left, target.bottom - target.top,
                 target.left, target.top);
+}
+
+// ---------------------------------------------------------------------------
+// Drag untoggle
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Drag untoggle
+// ---------------------------------------------------------------------------
+
+bool IsControlled(HWND hwnd) {
+    return g_controlled.find(hwnd) != g_controlled.end();
+}
+
+bool UntoggleForDrag(HWND hwnd, const POINT& cursor, RECT& out) {
+    auto it = g_controlled.find(hwnd);
+    if (it == g_controlled.end()) {
+        return false;
+    }
+
+    RECT current{};
+    if (!winutil::GetBounds(hwnd, current)) {
+        LogWinError("GetBounds");
+        return false;
+    }
+
+    const LONG ow = it->second.original.right - it->second.original.left;
+    const LONG oh = it->second.original.bottom - it->second.original.top;
+
+    // Resize to the original size while keeping the point under the cursor at
+    // the same spot, so the window shrinks to normal size and follows the mouse.
+    const LONG cw = current.right - current.left;
+    const LONG ch = current.bottom - current.top;
+    const double fx = cw > 0 ? static_cast<double>(cursor.x - current.left) / cw : 0.0;
+    const double fy = ch > 0 ? static_cast<double>(cursor.y - current.top) / ch : 0.0;
+
+    RECT rc;
+    rc.left = cursor.x - static_cast<LONG>(ow * fx);
+    rc.top = cursor.y - static_cast<LONG>(oh * fy);
+    rc.right = rc.left + ow;
+    rc.bottom = rc.top + oh;
+
+    if (!winutil::SetBounds(hwnd, rc)) {
+        LogWinError("SetBounds (drag start)");
+        return false;
+    }
+
+    std::printf("%s: drag untoggled to %ldx%ld at (%ld,%ld)\n",
+                it->second.mode == Mode::Maximize ? "maximize_toggle" : "snap",
+                rc.right - rc.left, rc.bottom - rc.top, rc.left, rc.top);
+
+    out = rc;
+    g_controlled.erase(it);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
