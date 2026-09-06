@@ -10,12 +10,19 @@ namespace {
 // before maximizing or snapping, so windows do not touch the screen edges.
 constexpr long kDefaultMargin = 15;
 
+// How far the window spans each axis. "Full" means it spans that whole axis;
+// Left/Right/Top/Bottom pin it to one half (or quarter when both axes are set).
+enum class HSide { Full, Left, Right };
+enum class VSide { Full, Top, Bottom };
+
 enum class Mode { Maximize, Snap };
 
 struct Control {
     Mode mode;
     RECT original;  // size (and position) the window had before placement
     RECT applied;   // bounds the app last set for the window
+    HSide h;        // current horizontal placement (Snap only)
+    VSide v;        // current vertical placement (Snap only)
 };
 
 // Windows currently under application control. Shared by all actions so a
@@ -69,7 +76,7 @@ RECT MaximizeTarget(HWND hwnd, bool& ok) {
     return work;
 }
 
-RECT SnapTarget(HWND hwnd, winutil::Half half, bool& ok) {
+RECT MarginedWorkArea(HWND hwnd, bool& ok, const char* what) {
     RECT work{};
     if (!GetWorkArea(hwnd, work)) {
         LogWinError("GetWorkArea");
@@ -77,12 +84,87 @@ RECT SnapTarget(HWND hwnd, winutil::Half half, bool& ok) {
         return {};
     }
     if (!ApplyMargins(work)) {
-        std::fprintf(stderr, "snap: margins leave no usable space.\n");
+        std::fprintf(stderr, "%s: margins leave no usable space.\n", what);
         ok = false;
         return {};
     }
     ok = true;
-    return winutil::HalfBounds(work, half);
+    return work;
+}
+
+// The rect covered by a region (half or quarter) cut from the margined work
+// area. Splitting at the middle of each axis, "Full" spans the whole axis and a
+// half-side spans up to the split; adjacent regions only touch along an edge.
+RECT RegionBounds(const RECT& work, HSide h, VSide v) {
+    RECT rc = work;
+    const int midX = work.left + (work.right - work.left) / 2;
+    const int midY = work.top + (work.bottom - work.top) / 2;
+    switch (h) {
+        case HSide::Left:
+            rc.right = midX;
+            break;
+        case HSide::Right:
+            rc.left = midX;
+            break;
+        case HSide::Full:
+            break;
+    }
+    switch (v) {
+        case VSide::Top:
+            rc.bottom = midY;
+            break;
+        case VSide::Bottom:
+            rc.top = midY;
+            break;
+        case VSide::Full:
+            break;
+    }
+    return rc;
+}
+
+bool IsHorizontalHalf(winutil::Half half) {
+    return half == winutil::Half::Left || half == winutil::Half::Right;
+}
+
+HSide HorizontalSide(winutil::Half half) {
+    return half == winutil::Half::Left ? HSide::Left : HSide::Right;
+}
+
+VSide VerticalSide(winutil::Half half) {
+    return half == winutil::Half::Top ? VSide::Top : VSide::Bottom;
+}
+
+// Pressing `half` evolves the current region (ph, pv) into the next one. The
+// pressed arrow sets its own axis to that side, keeping the other axis, so two
+// perpendicular snaps compose into a quarter. Re-pressing the side the window
+// already hugs expands the orthogonal axis back toward full (quarter -> half ->
+// full) rather than doing nothing.
+void EvolveRegion(winutil::Half half, HSide ph, VSide pv, HSide& nh, VSide& nv) {
+    if (IsHorizontalHalf(half)) {
+        const HSide s = HorizontalSide(half);
+        if (ph == s && pv != VSide::Full) {
+            nh = s;
+            nv = VSide::Full;  // quarter -> half
+        } else if (ph == s) {
+            nh = HSide::Full;  // half -> full
+            nv = VSide::Full;
+        } else {
+            nh = s;            // set horizontal side, keep vertical
+            nv = pv;
+        }
+        return;
+    }
+    const VSide t = VerticalSide(half);
+    if (pv == t && ph != HSide::Full) {
+        nh = HSide::Full;  // quarter -> half
+        nv = t;
+    } else if (pv == t) {
+        nh = HSide::Full;  // half -> full
+        nv = VSide::Full;
+    } else {
+        nh = ph;           // set vertical side, keep horizontal
+        nv = t;
+    }
 }
 
 }  // namespace
@@ -158,7 +240,8 @@ void MaximizeToggle::Apply(HWND hwnd) {
         return;
     }
 
-    g_controlled[hwnd] = Control{Mode::Maximize, original, target};
+    g_controlled[hwnd] = Control{Mode::Maximize, original, target,
+                                 HSide::Full, VSide::Full};
     std::printf("%s: maximized window to %ldx%ld at (%ld,%ld)\n",
                 Name().c_str(),
                 target.right - target.left, target.bottom - target.top,
@@ -200,21 +283,37 @@ void Snap::Apply(HWND hwnd) {
         return;
     }
 
+    // A window we already snapped keeps its region so the next snap composes
+    // into a quarter. Anything else (fresh, or maximized by us) currently spans
+    // the whole monitor, so it starts from the full region.
+    auto it = g_controlled.find(hwnd);
+    HSide prevH = HSide::Full;
+    VSide prevV = VSide::Full;
+    if (it != g_controlled.end() && it->second.mode == Mode::Snap) {
+        prevH = it->second.h;
+        prevV = it->second.v;
+    }
+
+    HSide nextH = HSide::Full;
+    VSide nextV = VSide::Full;
+    EvolveRegion(half_, prevH, prevV, nextH, nextV);
+
     bool ok = false;
-    const RECT target = SnapTarget(hwnd, half_, ok);
+    const RECT work = MarginedWorkArea(hwnd, ok, Name().c_str());
     if (!ok) {
         return;
     }
+    const RECT target = RegionBounds(work, nextH, nextV);
 
     if (BoundsEqual(current, target)) {
-        std::printf("%s: window already in that half; no change.\n", Name().c_str());
+        std::printf("%s: window already in that region; no change.\n",
+                    Name().c_str());
         return;
     }
 
     // Preserve the window's original pre-application bounds across placement
     // switches (e.g. a maximized window that is then snapped) so an eventual
     // drag-untoggle returns to the true original size.
-    auto it = g_controlled.find(hwnd);
     RECT original{};
     if (it != g_controlled.end()) {
         original = it->second.original;
@@ -231,7 +330,7 @@ void Snap::Apply(HWND hwnd) {
         return;
     }
 
-    g_controlled[hwnd] = Control{Mode::Snap, original, target};
+    g_controlled[hwnd] = Control{Mode::Snap, original, target, nextH, nextV};
     std::printf("%s: snapped window to %ldx%ld at (%ld,%ld)\n",
                 Name().c_str(),
                 target.right - target.left, target.bottom - target.top,

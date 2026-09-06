@@ -16,6 +16,5 @@ bool SetBounds(HWND hwnd, const RECT& rc);
 bool GetMonitorWorkArea(HWND hwnd, RECT& out);
 
 enum class Half { Left, Right, Top, Bottom };
-RECT HalfBounds(const RECT& work, Half half);
 
 }  // namespace winutil

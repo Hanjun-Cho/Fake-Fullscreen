@@ -31,9 +31,11 @@ public:
     void Apply(HWND hwnd) override;
 };
 
-// Moves the focused window into the given half of its monitor's work area,
-// respecting margins. Idempotent and one-way: does not restore. The window
-// becomes "controlled" so dragging it untoggles to its original size.
+// Pins the focused window to one side of a single axis of its monitor's work
+// area, respecting margins. Snaps are cumulative: a perpendicular snap turns
+// the window into a quarter, and re-pressing the side the window already hugs
+// expands it back toward full. The window becomes "controlled" so dragging it
+// by its title bar untoggles it to its original size.
 class Snap : public Action {
 public:
     static const std::string& ActionName(winutil::Half half);

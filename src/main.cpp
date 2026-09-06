@@ -2,6 +2,7 @@
 #include <shellapi.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -22,11 +23,15 @@ std::string g_exeDir;
 HWND g_window = nullptr;
 HHOOK g_mouseHook = nullptr;
 
-// State for our own window drag. When the user starts dragging the caption of
-// a controlled window we swallow the OS move and drive the window ourselves,
-// which lets us resize it to its original size and move it freely.
+// State for our own window drag. When the user presses on the caption of a
+// controlled window we swallow the OS move and watch: only once the press turns
+// into a genuine drag (moved past the OS threshold) do we untoggle the window
+// and drive it ourselves, resizing it to its original size and moving it freely.
+// A plain click — on the title bar or anywhere in the client area — never
+// untoggles.
 struct DragState {
-    bool active = false;
+    bool down = false;    // left button captured on a controlled caption
+    bool moving = false;  // drag confirmed; we are driving the window
     HWND hwnd = nullptr;
     POINT startCursor{};
     RECT startRect{};
@@ -42,35 +47,48 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
         const MSLLHOOKSTRUCT* ms = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
 
-        if (wParam == WM_LBUTTONDOWN && !g_drag.active) {
+        if (wParam == WM_LBUTTONDOWN && !g_drag.down) {
             HWND under = WindowFromPoint(ms->pt);
             HWND root = under != nullptr ? GetAncestor(under, GA_ROOT) : nullptr;
             if (root != nullptr && ffs::IsControlled(root)) {
-                // Only caption drags (not clicks on client-area buttons).
+                // Only a press on the caption is eligible; clicks in the client
+                // area are ignored entirely.
                 const LRESULT hit =
                     SendMessageW(root, WM_NCHITTEST, 0,
                                  MAKELPARAM(ms->pt.x, ms->pt.y));
                 if (hit == HTCAPTION) {
-                    RECT rc{};
-                    if (ffs::UntoggleForDrag(root, ms->pt, rc)) {
-                        g_drag.active = true;
-                        g_drag.hwnd = root;
-                        g_drag.startCursor = ms->pt;
-                        g_drag.startRect = rc;
-                        return 1;  // swallow so the app does not start its own move
-                    }
+                    // Swallow the down so the OS does not begin its own move,
+                    // but do not untoggle yet — wait for a real drag.
+                    g_drag.down = true;
+                    g_drag.moving = false;
+                    g_drag.hwnd = root;
+                    g_drag.startCursor = ms->pt;
+                    winutil::GetBounds(root, g_drag.startRect);
+                    return 1;
                 }
             }
-        } else if (g_drag.active) {
+        } else if (g_drag.down && IsWindow(g_drag.hwnd)) {
             if (wParam == WM_MOUSEMOVE) {
-                if (IsWindow(g_drag.hwnd)) {
+                const int threshold = GetSystemMetrics(SM_CXDRAG);
+                const bool dragged =
+                    std::abs(ms->pt.x - g_drag.startCursor.x) > threshold ||
+                    std::abs(ms->pt.y - g_drag.startCursor.y) > threshold;
+                if (!g_drag.moving) {
+                    // Untoggle only once the caption is genuinely dragged.
+                    if (dragged &&
+                        ffs::UntoggleForDrag(g_drag.hwnd, ms->pt, g_drag.startRect)) {
+                        g_drag.moving = true;
+                        g_drag.startCursor = ms->pt;
+                    }
+                } else {
                     RECT r = g_drag.startRect;
                     OffsetRect(&r, ms->pt.x - g_drag.startCursor.x,
                                ms->pt.y - g_drag.startCursor.y);
                     SetWindowRect(g_drag.hwnd, r);
                 }
             } else if (wParam == WM_LBUTTONUP) {
-                g_drag.active = false;
+                g_drag.down = false;
+                g_drag.moving = false;
                 g_drag.hwnd = nullptr;
             }
         }

@@ -7,19 +7,30 @@ monitor's working area.
 | Action | Default hotkey | Effect |
 | ------ | -------------- | ------ |
 | `maximize_toggle` | `Ctrl+Alt+Space` | Fill the focused window's monitor work area (minus margins); press again to restore its original size and position. |
-| `snap_left` | `Ctrl+Alt+Left` | Move the window into the left half (minus margins). No-op if already there. |
-| `snap_right` | `Ctrl+Alt+Right` | Move into the right half. No-op if already there. |
-| `snap_top` | `Ctrl+Alt+Up` | Move into the top half. No-op if already there. |
-| `snap_bottom` | `Ctrl+Alt+Down` | Move into the bottom half. No-op if already there. |
+| `snap_left` | `Ctrl+Alt+Left` | Pin the window to the left, splitting that axis in half. |
+| `snap_right` | `Ctrl+Alt+Right` | Pin the window to the right, splitting that axis in half. |
+| `snap_top` | `Ctrl+Alt+Up` | Pin the window to the top, splitting that axis in half. |
+| `snap_bottom` | `Ctrl+Alt+Down` | Pin the window to the bottom, splitting that axis in half. |
 
-`maximize_toggle` is the only toggling action. Pressing it again while the
-window is still maximized restores its original size and position. Dragging a
-window that the app controls (maximized or snapped) is detected immediately
-and untoggles it: a maximized window returns to its original size and
-position, while a snapped window resizes to its original size and continues
-following the mouse (keeping the cursor's grab point fixed). Snaps are one-way and idempotent:
-snapping to the same half again does nothing, and snaps never restore a
-previous size.
+## Snapping
+
+Snaps are cumulative: each snap pins the window to one side of a single axis
+(left/right or top/bottom). Snapping a second, perpendicular side composes the
+two into a **quarter** of the monitor, so `snap_right` followed by `snap_bottom`
+places the window in the bottom-right quadrant (one quarter the size of
+`maximize_toggle`), and vice versa.
+
+Re-pressing the side a window already hugs **expands** it rather than doing
+nothing: a quarter returns to that half, and a half returns to fill the whole
+monitor. Reaching the full monitor returns it to the "not snapped" state for
+that axis.
+
+`maximize_toggle` is the only action that restores by re-pressing. A window the
+app controls (maximized or snapped) is untoggled only when you actually drag it
+by its **title bar** — clicking anywhere in the client area never untoggles it.
+Once a drag is detected the window returns to its original size and position,
+then continues following the mouse (keeping the cursor's grab point fixed).
+Snaps are otherwise one-way: they never restore a previous size on their own.
 
 Hotkeys are remapped by editing `config.ini`, which sits **next to the
 executable in the build directory**. No recompile needed to remap keys; the

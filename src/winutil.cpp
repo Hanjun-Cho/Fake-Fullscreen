@@ -54,25 +54,4 @@ bool GetMonitorWorkArea(HWND hwnd, RECT& out) {
     return true;
 }
 
-RECT HalfBounds(const RECT& work, Half half) {
-    RECT rc = work;
-    const int midX = work.left + (work.right - work.left) / 2;
-    const int midY = work.top + (work.bottom - work.top) / 2;
-    switch (half) {
-        case Half::Left:
-            rc.right = midX;
-            break;
-        case Half::Right:
-            rc.left = midX;
-            break;
-        case Half::Top:
-            rc.bottom = midY;
-            break;
-        case Half::Bottom:
-            rc.top = midY;
-            break;
-    }
-    return rc;
-}
-
 }  // namespace winutil
