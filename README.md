@@ -11,6 +11,8 @@ monitor's working area.
 | `snap_right` | `Ctrl+Alt+Right` | Pin the window to the right, splitting that axis in half. |
 | `snap_top` | `Ctrl+Alt+Up` | Pin the window to the top, splitting that axis in half. |
 | `snap_bottom` | `Ctrl+Alt+Down` | Pin the window to the bottom, splitting that axis in half. |
+| `move_monitor_left` | `Ctrl+Alt+Shift+Left` | Move the window to the monitor on the left, keeping its snapped region. |
+| `move_monitor_right` | `Ctrl+Alt+Shift+Right` | Move the window to the monitor on the right, keeping its snapped region. |
 
 ## Snapping
 
@@ -26,11 +28,11 @@ monitor. Reaching the full monitor returns it to the "not snapped" state for
 that axis.
 
 `maximize_toggle` is the only action that restores by re-pressing. A window the
-app controls (maximized or snapped) is untoggled only when you actually drag it
-by its **title bar** — clicking anywhere in the client area never untoggles it.
-Once a drag is detected the window returns to its original size and position,
-then continues following the mouse (keeping the cursor's grab point fixed).
-Snaps are otherwise one-way: they never restore a previous size on their own.
+app controls (maximized or snapped) is released from app control only when you
+actually **drag it by its title bar**; clicking it anywhere — including its
+client area — never affects it. Dragging does not resize the window; it simply
+lets Windows move it as a normal window (no jump). Snaps are otherwise one-way:
+they never restore a previous size on their own.
 
 Hotkeys are remapped by editing `config.ini`, which sits **next to the
 executable in the build directory**. No recompile needed to remap keys; the
@@ -72,8 +74,9 @@ icon and choose **Exit FakeFullscreen** to quit fully.
 ## Configuration (build/config.ini)
 
 ```
-maximize_toggle = ctrl+alt+space
-snap_left       = ctrl+alt+left
+maximize_toggle     = ctrl+alt+space
+snap_left           = ctrl+alt+left
+move_monitor_left   = ctrl+alt+shift+left
 ```
 
 - `action = modifiers+key`

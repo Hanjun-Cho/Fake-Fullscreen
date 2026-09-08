@@ -18,8 +18,8 @@ public:
 
 // Maximizes the focused window to its monitor's work area (minus margins).
 // The window becomes "controlled". Pressing again while still at the maximized
-// bounds restores the original size and position; dragging the window untoggles
-// it via a custom drag (see IsControlled / UntoggleForDrag).
+// bounds restores the original size and position; dragging the window by its
+// title bar releases it from control (see IsControlled / ReleaseControl).
 class MaximizeToggle : public Action {
 public:
     static const std::string& ActionName();
@@ -35,7 +35,7 @@ public:
 // area, respecting margins. Snaps are cumulative: a perpendicular snap turns
 // the window into a quarter, and re-pressing the side the window already hugs
 // expands it back toward full. The window becomes "controlled" so dragging it
-// by its title bar untoggles it to its original size.
+// by its title bar releases it from control (no resize).
 class Snap : public Action {
 public:
     static const std::string& ActionName(winutil::Half half);
@@ -50,6 +50,25 @@ private:
     winutil::Half half_;
 };
 
+// Moves the focused window to the monitor adjacent in the given horizontal
+// direction, keeping its current snapped region (full, half, or quarter) so it
+// lands on the corresponding side of the new monitor's work area. A window not
+// under application control spans the full new monitor. The window stays
+// "controlled", so dragging it by its title bar releases it as usual.
+class MoveMonitor : public Action {
+public:
+    static const std::string& ActionName(winutil::Direction dir);
+
+    explicit MoveMonitor(winutil::Direction dir);
+    ~MoveMonitor() override = default;
+
+    const std::string& Name() const override;
+    void Apply(HWND hwnd) override;
+
+private:
+    winutil::Direction dir_;
+};
+
 // Builds the compiled-in set of actions by name. Adding a new action kind
 // means adding a registration here.
 class ActionFactory {
@@ -61,10 +80,10 @@ public:
 // snapped by this app).
 bool IsControlled(HWND hwnd);
 
-// Called when a manual drag begins on a controlled window (click on its caption).
-// Resizes the window to its original size, keeping the point under `cursor`
-// fixed so it follows the mouse, and removes it from control. On success fills
-// `out` with the resulting bounds and returns true.
-bool UntoggleForDrag(HWND hwnd, const POINT& cursor, RECT& out);
+// Releases a controlled window from application control without resizing or
+// moving it. Called when the user begins dragging the window by its caption so
+// it then behaves like a normal window. Returns true if the window was under
+// control (and was released).
+bool ReleaseControl(HWND hwnd);
 
 }  // namespace ffs

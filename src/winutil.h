@@ -17,4 +17,12 @@ bool GetMonitorWorkArea(HWND hwnd, RECT& out);
 
 enum class Half { Left, Right, Top, Bottom };
 
+enum class Direction { Left, Right };
+
+// Work area of the monitor adjacent to the one `hwnd` currently occupies, in
+// the given horizontal direction. Returns the nearest monitor sharing the
+// window's row when one exists, otherwise the closest monitor in that
+// direction. False if hwnd is invalid or no monitor lies in that direction.
+bool GetNeighborMonitorWorkArea(HWND hwnd, Direction dir, RECT& out);
+
 }  // namespace winutil

@@ -338,56 +338,88 @@ void Snap::Apply(HWND hwnd) {
 }
 
 // ---------------------------------------------------------------------------
-// Drag untoggle
+// MoveMonitor
 // ---------------------------------------------------------------------------
 
+const std::string& MoveMonitor::ActionName(winutil::Direction dir) {
+    static const std::string kLeft = "move_monitor_left";
+    static const std::string kRight = "move_monitor_right";
+    switch (dir) {
+        case winutil::Direction::Left:
+            return kLeft;
+        case winutil::Direction::Right:
+            return kRight;
+    }
+    return kLeft;
+}
+
+MoveMonitor::MoveMonitor(winutil::Direction dir) : dir_(dir) {}
+
+const std::string& MoveMonitor::Name() const {
+    return ActionName(dir_);
+}
+
+void MoveMonitor::Apply(HWND hwnd) {
+    RECT work{};
+    if (!winutil::GetNeighborMonitorWorkArea(hwnd, dir_, work)) {
+        std::fprintf(stderr, "%s: no monitor to the %s; no change.\n",
+                     Name().c_str(),
+                     dir_ == winutil::Direction::Left ? "left" : "right");
+        return;
+    }
+    if (!ApplyMargins(work)) {
+        std::fprintf(stderr, "%s: margins leave no usable space.\n", Name().c_str());
+        return;
+    }
+
+    // Carry the window's current region across to the new monitor so a snapped
+    // (or quartered) window lands on the same side there. A window we do not
+    // control starts from the full region, matching how a fresh snap behaves.
+    auto it = g_controlled.find(hwnd);
+    HSide h = HSide::Full;
+    VSide v = VSide::Full;
+    RECT original{};
+    if (it != g_controlled.end()) {
+        h = it->second.h;
+        v = it->second.v;
+        original = it->second.original;
+    } else {
+        winutil::EnsureRestored(hwnd);
+        if (!winutil::GetBounds(hwnd, original)) {
+            LogWinError("GetBounds");
+            return;
+        }
+    }
+
+    const RECT target = RegionBounds(work, h, v);
+    if (!winutil::SetBounds(hwnd, target)) {
+        LogWinError("SetBounds (move monitor)");
+        return;
+    }
+
+    g_controlled[hwnd] = Control{Mode::Snap, original, target, h, v};
+    std::printf("%s: moved window %s, placed at %ldx%ld at (%ld,%ld)\n",
+                Name().c_str(),
+                dir_ == winutil::Direction::Left ? "left" : "right",
+                target.right - target.left, target.bottom - target.top,
+                target.left, target.top);
+}
+
 // ---------------------------------------------------------------------------
-// Drag untoggle
+// Drag release
 // ---------------------------------------------------------------------------
 
 bool IsControlled(HWND hwnd) {
     return g_controlled.find(hwnd) != g_controlled.end();
 }
 
-bool UntoggleForDrag(HWND hwnd, const POINT& cursor, RECT& out) {
+bool ReleaseControl(HWND hwnd) {
     auto it = g_controlled.find(hwnd);
     if (it == g_controlled.end()) {
         return false;
     }
-
-    RECT current{};
-    if (!winutil::GetBounds(hwnd, current)) {
-        LogWinError("GetBounds");
-        return false;
-    }
-
-    const LONG ow = it->second.original.right - it->second.original.left;
-    const LONG oh = it->second.original.bottom - it->second.original.top;
-
-    // Resize to the original size while keeping the point under the cursor at
-    // the same spot, so the window shrinks to normal size and follows the mouse.
-    const LONG cw = current.right - current.left;
-    const LONG ch = current.bottom - current.top;
-    const double fx = cw > 0 ? static_cast<double>(cursor.x - current.left) / cw : 0.0;
-    const double fy = ch > 0 ? static_cast<double>(cursor.y - current.top) / ch : 0.0;
-
-    RECT rc;
-    rc.left = cursor.x - static_cast<LONG>(ow * fx);
-    rc.top = cursor.y - static_cast<LONG>(oh * fy);
-    rc.right = rc.left + ow;
-    rc.bottom = rc.top + oh;
-
-    if (!winutil::SetBounds(hwnd, rc)) {
-        LogWinError("SetBounds (drag start)");
-        return false;
-    }
-
-    std::printf("%s: drag untoggled to %ldx%ld at (%ld,%ld)\n",
-                it->second.mode == Mode::Maximize ? "maximize_toggle" : "snap",
-                rc.right - rc.left, rc.bottom - rc.top, rc.left, rc.top);
-
-    out = rc;
     g_controlled.erase(it);
+    std::printf("drag: released window from control.\n");
     return true;
 }
 
@@ -403,6 +435,12 @@ std::unique_ptr<Action> ActionFactory::Create(const std::string& name) {
                                winutil::Half::Top, winutil::Half::Bottom}) {
         if (name == Snap::ActionName(half)) {
             return std::make_unique<Snap>(half);
+        }
+    }
+    for (winutil::Direction dir : {winutil::Direction::Left,
+                                   winutil::Direction::Right}) {
+        if (name == MoveMonitor::ActionName(dir)) {
+            return std::make_unique<MoveMonitor>(dir);
         }
     }
     return nullptr;

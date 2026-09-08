@@ -23,25 +23,17 @@ std::string g_exeDir;
 HWND g_window = nullptr;
 HHOOK g_mouseHook = nullptr;
 
-// State for our own window drag. When the user presses on the caption of a
-// controlled window we swallow the OS move and watch: only once the press turns
-// into a genuine drag (moved past the OS threshold) do we untoggle the window
-// and drive it ourselves, resizing it to its original size and moving it freely.
-// A plain click — on the title bar or anywhere in the client area — never
-// untoggles.
+// State for our own window drag detection. When the user presses on the caption
+// of a controlled window we watch for a genuine drag. We do not intercept the
+// mouse at all — Windows handles the click (focus) and the caption move natively.
+// The only thing we do is detect that a real drag began so we can release the
+// window from app control and let it behave like a normal window. A plain click
+// never releases it.
 struct DragState {
-    bool down = false;    // left button captured on a controlled caption
-    bool moving = false;  // drag confirmed; we are driving the window
+    bool down = false;    // left pressed on a controlled window's caption
     HWND hwnd = nullptr;
     POINT startCursor{};
-    RECT startRect{};
 } g_drag;
-
-void SetWindowRect(HWND hwnd, const RECT& rc) {
-    SetWindowPos(hwnd, nullptr, rc.left, rc.top,
-                 rc.right - rc.left, rc.bottom - rc.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-}
 
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
@@ -51,27 +43,18 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
             HWND under = WindowFromPoint(ms->pt);
             HWND root = under != nullptr ? GetAncestor(under, GA_ROOT) : nullptr;
             if (root != nullptr && ffs::IsControlled(root)) {
-                // Only a press on the caption is eligible; clicks in the client
-                // area are ignored entirely.
+                // Only a press on the caption can turn into a drag; clicks in the
+                // client area are ignored entirely. We never swallow the press, so
+                // a plain click still focuses normally and a caption drag moves the
+                // window the way Windows does. We just remember the press so we can
+                // spot the moment a real drag starts.
                 const LRESULT hit =
                     SendMessageW(root, WM_NCHITTEST, 0,
                                  MAKELPARAM(ms->pt.x, ms->pt.y));
                 if (hit == HTCAPTION) {
-                    // Swallow the down so the OS does not begin its own native
-                    // caption move (we need to drive it to resize-to-original).
-                    // Do not untoggle yet — that happens only on a real drag.
                     g_drag.down = true;
-                    g_drag.moving = false;
                     g_drag.hwnd = root;
                     g_drag.startCursor = ms->pt;
-                    winutil::GetBounds(root, g_drag.startRect);
-                    // Swallowing the press also suppresses the click's normal
-                    // activation, so a plain title-bar click would never focus
-                    // the window. Activate it here instead.
-                    if (GetForegroundWindow() != root) {
-                        SetForegroundWindow(root);
-                    }
-                    return 1;
                 }
             }
         } else if (g_drag.down && IsWindow(g_drag.hwnd)) {
@@ -80,22 +63,15 @@ LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 const bool dragged =
                     std::abs(ms->pt.x - g_drag.startCursor.x) > threshold ||
                     std::abs(ms->pt.y - g_drag.startCursor.y) > threshold;
-                if (!g_drag.moving) {
-                    // Untoggle only once the caption is genuinely dragged.
-                    if (dragged &&
-                        ffs::UntoggleForDrag(g_drag.hwnd, ms->pt, g_drag.startRect)) {
-                        g_drag.moving = true;
-                        g_drag.startCursor = ms->pt;
-                    }
-                } else {
-                    RECT r = g_drag.startRect;
-                    OffsetRect(&r, ms->pt.x - g_drag.startCursor.x,
-                               ms->pt.y - g_drag.startCursor.y);
-                    SetWindowRect(g_drag.hwnd, r);
+                if (dragged) {
+                    // A genuine caption drag: let Windows keep moving it as a
+                    // normal window and simply drop our control over it.
+                    ffs::ReleaseControl(g_drag.hwnd);
+                    g_drag.down = false;
+                    g_drag.hwnd = nullptr;
                 }
             } else if (wParam == WM_LBUTTONUP) {
                 g_drag.down = false;
-                g_drag.moving = false;
                 g_drag.hwnd = nullptr;
             }
         }

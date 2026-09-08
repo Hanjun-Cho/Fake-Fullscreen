@@ -16,14 +16,17 @@ const char* kDefaultConfig =
     "#\n"
     "# Format:  action = modifiers+key\n"
     "# modifiers: ctrl, alt, shift, win  (combined with '+'; e.g. ctrl+alt+space)\n"
-    "# actions:  maximize_toggle, snap_left, snap_right, snap_top, snap_bottom\n"
+    "# actions:  maximize_toggle, snap_left, snap_right, snap_top, snap_bottom,\n"
+    "#           move_monitor_left, move_monitor_right\n"
     "# Lines starting with '#' are comments.\n"
     "\n"
-    "maximize_toggle = ctrl+alt+space\n"
-    "snap_left       = ctrl+alt+left\n"
-    "snap_right      = ctrl+alt+right\n"
-    "snap_top        = ctrl+alt+up\n"
-    "snap_bottom     = ctrl+alt+down\n";
+    "maximize_toggle     = ctrl+alt+space\n"
+    "snap_left           = ctrl+alt+left\n"
+    "snap_right          = ctrl+alt+right\n"
+    "snap_top            = ctrl+alt+up\n"
+    "snap_bottom         = ctrl+alt+down\n"
+    "move_monitor_left   = ctrl+alt+shift+left\n"
+    "move_monitor_right  = ctrl+alt+shift+right\n";
 
 std::string Trim(const std::string& s) {
     const char* ws = " \t\r\n";
